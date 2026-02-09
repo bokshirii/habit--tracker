@@ -83,6 +83,24 @@ def _filter_history(history: list[dict], filter_key: str) -> list[dict]:
     return filtered
 
 
+def calculate_streak(history: list[dict], total_habits: int, today_date: str | None = None) -> int:
+    today_value = today_date or datetime.now().date().isoformat()
+    history_map = {row["date"]: row for row in history}
+    streak = 0
+    cursor = datetime.fromisoformat(today_value).date()
+
+    while True:
+        date_key = cursor.isoformat()
+        entry = history_map.get(date_key)
+        if entry and _entry_achievement(entry, total_habits) >= 100:
+            streak += 1
+            cursor -= timedelta(days=1)
+            continue
+        break
+
+    return streak
+
+
 # -----------------------------
 # APIs
 # -----------------------------
@@ -282,31 +300,37 @@ with c2:
 
 checked_count = sum(1 for v in habits_checked.values() if v)
 achievement = int(round((checked_count / total_habits) * 100))
+today = datetime.now().date().isoformat()
+current_entry = {
+    "date": today,
+    "habits_done": [k for k, v in habits_checked.items() if v],
+    "mood": mood,
+    "notes": notes.strip() or None,
+}
+streak_history = list(st.session_state["history"])
+streak_history_map = {row["date"]: row for row in streak_history}
+streak_history_map[today] = current_entry
+current_streak = calculate_streak(list(streak_history_map.values()), total_habits, today_date=today)
 
 
 # -----------------------------
 # Metrics
 # -----------------------------
 st.subheader("📈 오늘 요약")
-m1, m2, m3 = st.columns(3)
+m1, m2, m3, m4 = st.columns(4)
 m1.metric("달성률", f"{achievement}%")
 m2.metric("달성 습관", f"{checked_count}/{total_habits}")
 m3.metric("기분", f"{mood}/10")
+m4.metric("연속 달성", f"{current_streak}일")
 
 
 # -----------------------------
 # Calendar + stats
 # -----------------------------
-today = datetime.now().date().isoformat()
 history = st.session_state["history"]
 history_map = {row["date"]: row for row in history}
 if today not in history_map:
-    history_map[today] = {
-        "date": today,
-        "habits_done": [k for k, v in habits_checked.items() if v],
-        "mood": mood,
-        "notes": notes.strip() or None,
-    }
+    history_map[today] = current_entry
 history_list = sorted(history_map.values(), key=lambda x: x["date"])
 
 st.subheader("🗓️ 기록 캘린더 & 통계")
@@ -443,6 +467,7 @@ if generate:
 
     share_text = f"""[AI 습관 트래커] {today}
 - 달성률: {achievement}% ({checked_count}/{total_habits})
+- 연속 달성: {current_streak}일
 - 기분: {mood}/10
 - 도시/날씨: {city} / {weather_short}
 - 오늘의 강아지: {dog_short}
