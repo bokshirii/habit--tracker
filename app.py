@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import requests
 import pandas as pd
 import streamlit as st
+from streamlit_calendar import calendar as st_calendar
 
 # OpenAI (official SDK)
 try:
@@ -35,21 +36,51 @@ with st.sidebar:
 # Session state init (6-day demo)
 # -----------------------------
 def _init_demo_history():
-    # 데모 6일: 달성률(%)용으로 habits_count만 저장
+    # 데모 6일: 완료한 습관 목록 기반
     base = datetime.now().date()
+    demo_habits = [
+        ["기상 미션", "물 마시기"],
+        ["기상 미션", "물 마시기", "공부/독서"],
+        ["물 마시기"],
+        ["기상 미션", "물 마시기", "공부/독서", "운동하기"],
+        ["기상 미션", "물 마시기", "공부/독서"],
+        ["기상 미션", "물 마시기", "공부/독서", "운동하기", "수면"],
+    ]
     demo = [
-        {"date": (base - timedelta(days=6)).isoformat(), "habits_count": 2, "mood": 5},
-        {"date": (base - timedelta(days=5)).isoformat(), "habits_count": 3, "mood": 6},
-        {"date": (base - timedelta(days=4)).isoformat(), "habits_count": 1, "mood": 4},
-        {"date": (base - timedelta(days=3)).isoformat(), "habits_count": 4, "mood": 7},
-        {"date": (base - timedelta(days=2)).isoformat(), "habits_count": 3, "mood": 6},
-        {"date": (base - timedelta(days=1)).isoformat(), "habits_count": 5, "mood": 8},
+        {"date": (base - timedelta(days=6)).isoformat(), "habits_done": demo_habits[0], "mood": 5},
+        {"date": (base - timedelta(days=5)).isoformat(), "habits_done": demo_habits[1], "mood": 6},
+        {"date": (base - timedelta(days=4)).isoformat(), "habits_done": demo_habits[2], "mood": 4},
+        {"date": (base - timedelta(days=3)).isoformat(), "habits_done": demo_habits[3], "mood": 7},
+        {"date": (base - timedelta(days=2)).isoformat(), "habits_done": demo_habits[4], "mood": 6},
+        {"date": (base - timedelta(days=1)).isoformat(), "habits_done": demo_habits[5], "mood": 8},
     ]
     return demo
 
 
 if "history" not in st.session_state:
     st.session_state["history"] = _init_demo_history()
+
+
+def _entry_achievement(entry: dict, total_habits: int) -> float:
+    return (len(entry.get("habits_done", [])) / total_habits) * 100 if total_habits else 0.0
+
+
+def _filter_history(history: list[dict], filter_key: str) -> list[dict]:
+    today_date = datetime.now().date()
+    if filter_key == "최근 30일":
+        start_date = today_date - timedelta(days=29)
+    elif filter_key == "이번 달":
+        start_date = today_date.replace(day=1)
+    else:
+        start_date = None
+
+    filtered = []
+    for row in history:
+        row_date = datetime.fromisoformat(row["date"]).date()
+        if start_date and row_date < start_date:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 # -----------------------------
@@ -218,6 +249,7 @@ habit_defs = [
     ("🏃", "운동하기"),
     ("😴", "수면"),
 ]
+total_habits = len(habit_defs)
 
 col_left, col_right = st.columns(2)
 habits_checked = {}
@@ -228,6 +260,7 @@ for idx, (emoji, name) in enumerate(habit_defs):
         habits_checked[name] = st.checkbox(f"{emoji} {name}", value=False, key=f"habit_{name}")
 
 mood = st.slider("😊 오늘 기분은 어때요? (1~10)", min_value=1, max_value=10, value=6, step=1)
+notes = st.text_area("📝 오늘 메모 (선택)", placeholder="간단한 메모를 남겨보세요.", height=100)
 
 cities = [
     "Seoul",
@@ -248,7 +281,7 @@ with c2:
     coach_style = st.radio("🧠 코치 스타일", ["스파르타 코치", "따뜻한 멘토", "게임 마스터"], horizontal=True)
 
 checked_count = sum(1 for v in habits_checked.values() if v)
-achievement = int(round((checked_count / 5) * 100))
+achievement = int(round((checked_count / total_habits) * 100))
 
 
 # -----------------------------
@@ -257,25 +290,82 @@ achievement = int(round((checked_count / 5) * 100))
 st.subheader("📈 오늘 요약")
 m1, m2, m3 = st.columns(3)
 m1.metric("달성률", f"{achievement}%")
-m2.metric("달성 습관", f"{checked_count}/5")
+m2.metric("달성 습관", f"{checked_count}/{total_habits}")
 m3.metric("기분", f"{mood}/10")
 
 
 # -----------------------------
-# 7-day chart (6 demo + today's current)
+# Calendar + stats
 # -----------------------------
 today = datetime.now().date().isoformat()
-demo_history = st.session_state["history"]
+history = st.session_state["history"]
+history_map = {row["date"]: row for row in history}
+if today not in history_map:
+    history_map[today] = {
+        "date": today,
+        "habits_done": [k for k, v in habits_checked.items() if v],
+        "mood": mood,
+        "notes": notes.strip() or None,
+    }
+history_list = sorted(history_map.values(), key=lambda x: x["date"])
 
-# 최근 6개만 유지 (안정성)
-demo_history = sorted(demo_history, key=lambda x: x["date"])[-6:]
+st.subheader("🗓️ 기록 캘린더 & 통계")
+filter_key = st.selectbox("기간 필터", ["최근 30일", "이번 달", "전체 기록"], index=0)
+filtered_history = _filter_history(history_list, filter_key)
 
-chart_rows = demo_history + [{"date": today, "habits_count": checked_count, "mood": mood}]
-df = pd.DataFrame(chart_rows)
-df["achievement"] = (df["habits_count"] / 5.0) * 100
+stats_df = pd.DataFrame(filtered_history)
+if not stats_df.empty:
+    stats_df["achievement"] = stats_df.apply(lambda row: _entry_achievement(row, total_habits), axis=1)
+    st.bar_chart(stats_df.set_index("date")["achievement"])
+else:
+    st.info("선택한 기간에 기록이 없습니다.")
 
-st.subheader("🗓️ 최근 7일 달성률")
-st.bar_chart(df.set_index("date")["achievement"])
+events = []
+for row in filtered_history:
+    achieved = _entry_achievement(row, total_habits)
+    events.append(
+        {
+            "title": f"✔ {len(row.get('habits_done', []))}/{total_habits} ({achieved:.0f}%)",
+            "start": row["date"],
+            "end": row["date"],
+            "allDay": True,
+        }
+    )
+
+calendar_options = {
+    "initialView": "dayGridMonth",
+    "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth"},
+    "selectable": True,
+    "editable": False,
+}
+
+calendar_state = st_calendar(events=events, options=calendar_options, key="history_calendar")
+
+selected_date = None
+if calendar_state:
+    if calendar_state.get("event"):
+        selected_date = calendar_state["event"].get("start")
+    elif calendar_state.get("date"):
+        selected_date = calendar_state.get("date")
+
+if selected_date:
+    selected_date = selected_date[:10]
+    selected_entry = history_map.get(selected_date)
+else:
+    selected_entry = history_map.get(today)
+
+st.markdown("### 📌 선택한 날짜 상세")
+if selected_entry:
+    achieved = _entry_achievement(selected_entry, total_habits)
+    st.info(
+        f"**날짜:** {selected_entry['date']}\n\n"
+        f"- 달성률: {achieved:.0f}% ({len(selected_entry.get('habits_done', []))}/{total_habits})\n"
+        f"- 기분: {selected_entry.get('mood', '-')}/10\n"
+        f"- 완료한 습관: {', '.join(selected_entry.get('habits_done', [])) or '없음'}\n"
+        f"- 메모: {selected_entry.get('notes') or '없음'}"
+    )
+else:
+    st.warning("선택한 날짜에 기록이 없습니다.")
 
 
 # -----------------------------
@@ -290,9 +380,14 @@ if generate:
     # 오늘 기록 session_state에 저장 (중복 날짜면 업데이트)
     history = st.session_state["history"]
     history_map = {row["date"]: row for row in history}
-    history_map[today] = {"date": today, "habits_count": checked_count, "mood": mood}
-    # 오래된 것부터 정리해서 최대 30일 정도만 유지(가벼운 방어)
-    merged = sorted(history_map.values(), key=lambda x: x["date"])[-30:]
+    history_map[today] = {
+        "date": today,
+        "habits_done": [k for k, v in habits_checked.items() if v],
+        "mood": mood,
+        "notes": notes.strip() or None,
+    }
+    # 오래된 것부터 정리해서 최대 180일 정도만 유지(가벼운 방어)
+    merged = sorted(history_map.values(), key=lambda x: x["date"])[-180:]
     st.session_state["history"] = merged
 
     # External APIs
@@ -347,7 +442,7 @@ if generate:
     dog_short = (dog.get("breed") if dog else "강아지 정보 없음")
 
     share_text = f"""[AI 습관 트래커] {today}
-- 달성률: {achievement}% ({checked_count}/5)
+- 달성률: {achievement}% ({checked_count}/{total_habits})
 - 기분: {mood}/10
 - 도시/날씨: {city} / {weather_short}
 - 오늘의 강아지: {dog_short}
